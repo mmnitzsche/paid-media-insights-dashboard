@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 import pydeck as pdk
 import re
 import os
+from sklearn.linear_model import LinearRegression
 
 # -----------------------------------------------------------------------------
 # 1. Data Cleaning / Preparation Functions
@@ -239,13 +240,56 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # 4. Navigation Tabs
 # -----------------------------------------------------------------------------
-tab_dashboard, tab_about = st.tabs(["Dashboard", "About"])
+tab_dashboard, tab_prediction, tab_about = st.tabs(["Dashboard", "Prediction", "About"])
 
 with tab_dashboard:
+    # -----------------------------------------------------------------------------
+    # 5. Dashboard Data Aggregation & Prediction Logic
+    # -----------------------------------------------------------------------------
+    
+    # Daily Aggregation for Charts and Predictions
+    daily = (
+        dff.groupby(dff["date"].dt.date)
+        .agg(
+            {
+                "Impressions": "sum",
+                "Clicks": "sum",
+                "Cost_num": "sum",
+                "Conversions": "sum",
+                "Sale_num": "sum",
+            }
+        )
+        .reset_index()
+        .rename(columns={"index": "date"})
+    )
+    daily["date"] = pd.to_datetime(daily["date"])
+    
+    # Base KPI Definitions
     total_spend = dff["Cost_num"].sum()
     total_revenue = dff["Sale_num"].sum()
     total_conversions = dff["Conversions"].sum()
     total_clicks = dff["Clicks"].sum()
+
+    daily["CPC"] = np.where(daily["Clicks"] > 0, daily["Cost_num"] / daily["Clicks"], 0)
+    daily["ConvRate"] = np.where(
+        daily["Clicks"] > 0, daily["Conversions"] / daily["Clicks"], 0
+    )
+
+    # Forecast Logic for Summary
+    week_forecast = 0
+    if len(daily) > 1:
+        X_sum = (daily['date'] - daily['date'].min()).dt.days.values.reshape(-1, 1)
+        y_sum = daily['Sale_num'].values
+        model_sum = LinearRegression().fit(X_sum, y_sum)
+        
+        last_d = pd.to_datetime(daily['date'].max())
+        future_sum = pd.date_range(last_d + pd.Timedelta(days=1), periods=7, freq='D')
+        future_t_sum = (future_sum - pd.to_datetime(daily['date'].min())).days.values.reshape(-1, 1)
+        preds_sum = np.maximum(model_sum.predict(future_t_sum), 0)
+        week_forecast = preds_sum.sum()
+        forecast_info = f"Based on recent trends, we expect a total revenue of ${week_forecast:,.2f} for the upcoming week from {last_d.date()}. Check the 'Prediction' tab for a detailed trend analysis."
+    else:
+        forecast_info = "Insufficient data for forecasting. Adjust filters for a wider range."
 
     # Calculated Metrics
     total_impressions = dff["Impressions"].sum()
@@ -308,7 +352,9 @@ with tab_dashboard:
         '<div class="subtle">What is the cost per result and the return on investment?</div>',
         unsafe_allow_html=True,
     )
-    row3_1, row3_2, row3_3, row3_4, row3_5 = st.columns(5)
+    
+    # Financial Row 1
+    row3_1, row3_2, row3_3 = st.columns(3)
     row3_1.metric(
         "Conversions",
         f"{total_conversions:,.0f}",
@@ -324,43 +370,30 @@ with tab_dashboard:
         f"${total_spend:,.2f}",
         help="Total amount invested in campaigns.",
     )
-    row3_4.metric(
+    
+    # Financial Row 2
+    row4_1, row4_2, row4_3 = st.columns(3)
+    row4_1.metric(
         "Total Revenue",
         f"${total_revenue:,.2f}",
         help="Total amount of revenue generated.",
     )
-    row3_5.metric(
+    row4_2.metric(
         "ROAS",
         f"{roas:.2f}x",
         help="Return on Ad Spend: Number of times the invested amount returned as revenue.",
+    )
+    row4_3.metric(
+        "Exp. Revenue (7d) 🔮",
+        f"${week_forecast:,.2f}",
+        help=forecast_info
     )
 
     st.divider()
 
     # -----------------------------------------------------------------------------
-    # 5. Charts (Plotly Dual Axis)
+    # 6. Charts (Plotly Dual Axis)
     # -----------------------------------------------------------------------------
-
-    # Daily Aggregation for Charts
-    daily = (
-        dff.groupby(dff["date"].dt.date)
-        .agg(
-            {
-                "Impressions": "sum",
-                "Clicks": "sum",
-                "Cost_num": "sum",
-                "Conversions": "sum",
-                "Sale_num": "sum",
-            }
-        )
-        .reset_index()
-        .rename(columns={"index": "date"})
-    )
-
-    daily["CPC"] = np.where(daily["Clicks"] > 0, daily["Cost_num"] / daily["Clicks"], 0)
-    daily["ConvRate"] = np.where(
-        daily["Clicks"] > 0, daily["Conversions"] / daily["Clicks"], 0
-    )
 
     chart_col1, chart_col2 = st.columns(2)
 
@@ -679,6 +712,90 @@ with tab_dashboard:
         use_container_width=True,
         hide_index=True,
     )
+
+with tab_prediction:
+    col_h1, col_h2 = st.columns([2, 1])
+    
+    with col_h1:
+        st.markdown('<div class="section-title">Revenue Forecast Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="subtle">Using a Linear Regression trend model to project future revenue based on filtered data.</div>', unsafe_allow_html=True)
+    
+    if len(daily) > 1:
+        with col_h2:
+            horizon = st.slider("Forecast horizon (days)", 7, 30, 14, help="Number of days to project into the future.")
+            
+            # Forecast Calculation (needed before the metric)
+            daily_p = daily.copy()
+            daily_p['t'] = (daily_p['date'] - daily_p['date'].min()).dt.days
+            X_p = daily_p[['t']].values
+            y_p = daily_p['Sale_num'].values
+            model_p = LinearRegression().fit(X_p, y_p)
+            
+            last_date_p = pd.to_datetime(daily_p['date'].max())
+            future_dates_p = pd.date_range(last_date_p + pd.Timedelta(days=1), periods=horizon, freq="D")
+            future_t_p = (future_dates_p - pd.to_datetime(daily_p['date'].min())).days.values.reshape(-1, 1)
+            y_pred_p = np.maximum(model_p.predict(future_t_p), 0)
+            proj_rev = y_pred_p.sum()
+            
+            st.metric(
+                f"Projected Revenue ({horizon}d)",
+                f"${proj_rev:,.2f}",
+                help="Sum of all predicted daily revenues for the selected horizon."
+            )
+        daily_p['t'] = (daily_p['date'] - daily_p['date'].min()).dt.days
+        X_p = daily_p[['t']].values
+        y_p = daily_p['Sale_num'].values
+        
+        model_p = LinearRegression().fit(X_p, y_p)
+        
+        # Future dates
+        last_date_p = pd.to_datetime(daily_p['date'].max())
+        future_dates_p = pd.date_range(last_date_p + pd.Timedelta(days=1), periods=horizon, freq="D")
+        future_t_p = (future_dates_p - pd.to_datetime(daily_p['date'].min())).days.values.reshape(-1, 1)
+        y_pred_p = np.maximum(model_p.predict(future_t_p), 0)
+        
+        forecast_p = pd.DataFrame({
+            "date": future_dates_p,
+            "predicted_revenue": y_pred_p
+        })
+        
+        # Plot
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(
+            x=daily_p['date'], y=daily_p['Sale_num'],
+            mode="lines+markers",
+            name="Actual Revenue",
+            line=dict(color=COLOR_ACCENT)
+        ))
+        fig_p.add_trace(go.Scatter(
+            x=forecast_p['date'], y=forecast_p['predicted_revenue'],
+            mode="lines+markers",
+            name="Forecasted Trend",
+            line=dict(color="#e377c2", dash='dot')
+        ))
+        
+        fig_p.update_layout(
+            title="Revenue Trend & Forecast",
+            paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLOR_TEXT_PRIMARY),
+            legend=dict(
+                orientation="h", 
+                yanchor="bottom", 
+                y=1.02, 
+                xanchor="right", 
+                x=1,
+                font=dict(color=COLOR_TEXT_PRIMARY)
+            ),
+            xaxis=dict(gridcolor=COLOR_SURFACE, color=COLOR_TEXT_SECONDARY),
+            yaxis=dict(title="Revenue ($)", gridcolor=COLOR_SURFACE, color=COLOR_TEXT_SECONDARY),
+            title_font=dict(color=COLOR_TEXT_PRIMARY),
+            height=450
+        )
+        
+        st.plotly_chart(fig_p, use_container_width=True)
+    else:
+        st.warning("Insufficient data for forecasting. Please adjust your filters to include a wider date range.")
 
 with tab_about:
     st.markdown(
