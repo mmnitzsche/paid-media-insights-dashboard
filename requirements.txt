@@ -4,3 +4,4 @@ numpy
 altair
 streamlit-echarts
 plotly
+pydeck

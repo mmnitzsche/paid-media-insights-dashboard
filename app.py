@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import pydeck as pdk
 import re
 import os
 
@@ -50,9 +51,10 @@ def load_and_clean_data(path: str):
     df['Cost_num'] = df['Cost'].apply(parse_money)
     df['Sale_num'] = df['Sale_Amount'].apply(parse_money)
     
-    numeric_cols = ['Clicks', 'Impressions', 'Leads', 'Conversions']
+    numeric_cols = ['Clicks', 'Impressions', 'Leads', 'Conversions', 'latitude', 'longitude']
     for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
     # Standardize campaign names for cleaner filters
     df['Campaign_Name'] = df['Campaign_Name'].fillna('Unknown').str.strip()
@@ -63,13 +65,34 @@ def load_and_clean_data(path: str):
 # 2. Main Dashboard Setup
 # -----------------------------------------------------------------------------
 
-st.set_page_config(page_title="Paid Media Performance Dashboard", layout="wide")
+st.set_page_config(page_title="Paid Media Performance Dashboard of NITIT Courses", layout="wide")
 
 # Custom CSS for Premium Design
 st.markdown(
     """
     <style>
+      .stApp {
+          background-color: #f5f7fa;
+      }
       .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
+      
+      /* Dark Sidebar Styling */
+      section[data-testid="stSidebar"] {
+          background-color: #181818;
+      }
+      section[data-testid="stSidebar"] .stMarkdown p, 
+      section[data-testid="stSidebar"] h1, 
+      section[data-testid="stSidebar"] h2, 
+      section[data-testid="stSidebar"] label {
+          color: #ffffff !important;
+      }
+
+      /* Filter Button/Tag Colors */
+      .stMultiSelect div[data-baseweb="tag"] {
+          background-color: #38d5ea !important;
+          color: #181818 !important;
+      }
+      
       div[data-testid="stMetric"] {
           background: #ffffff; 
           border: 1px solid #eef1f6; 
@@ -105,6 +128,9 @@ if df is None:
 # -----------------------------------------------------------------------------
 # 3. Sidebar Filters
 # -----------------------------------------------------------------------------
+
+# Sidebar Logo/Header Image
+st.sidebar.image("assets/nitit_courses_header.png", use_container_width=True)
 
 st.sidebar.header("Dashboard Filters")
 
@@ -144,6 +170,7 @@ dff = df.loc[mask].copy()
 # -----------------------------------------------------------------------------
 
 st.title("Paid Media Performance Dashboard")
+st.markdown('<div class="subtle">This dashboard shows the performance of paid media campaigns for NITIT Courses.</div>', unsafe_allow_html=True)
 
 total_spend = dff['Cost_num'].sum()
 total_revenue = dff['Sale_num'].sum()
@@ -163,28 +190,28 @@ cpc = total_spend / total_clicks if total_clicks > 0 else 0
 # KPI Cards (Narrative Sectors)
 # -----------------------------
 
-st.markdown('<div class="section-title">1. Visibilidade & Alcance (Awareness)</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtle">Como o público está visualizando seus anúncios?</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">1. Visibility & Reach (Awareness)</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtle">How is the audience viewing your ads?</div>', unsafe_allow_html=True)
 row1_1, row1_2, row1_3 = st.columns(3)
-row1_1.metric("Impressions", f"{total_impressions:,.0f}", help="Número total de vezes que seus anúncios foram exibidos.")
-row1_2.metric("CPM", f"${cpm:,.2f}", help="Custo médio por mil impressões.")
-row1_3.metric("CTR", f"{ctr:.2%}", help="Click-Through Rate: Porcentagem de impressões que resultaram em cliques.")
+row1_1.metric("Impressions", f"{total_impressions:,.0f}", help="Total number of times your ads were displayed.")
+row1_2.metric("CPM", f"${cpm:,.2f}", help="Average cost per thousand impressions.")
+row1_3.metric("CTR", f"{ctr:.2%}", help="Click-Through Rate: Percentage of impressions that resulted in clicks.")
 
-st.markdown('<div class="section-title">2. Engajamento & Eficiência (Engagement)</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtle">O público está interagindo e o tráfego é qualificado?</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">2. Engagement & Efficiency (Engagement)</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtle">Is the audience interacting and is the traffic qualified?</div>', unsafe_allow_html=True)
 row2_1, row2_2, row2_3 = st.columns(3)
-row2_1.metric("Clicks", f"{total_clicks:,.0f}", help="Número total de cliques em seus anúncios.")
-row2_2.metric("CPC", f"${cpc:,.2f}", help="Custo médio pago por cada clique.")
-row2_3.metric("Conversion Rate", f"{conv_rate:.2%}", help="Porcentagem de cliques que resultaram em conversões.")
+row2_1.metric("Clicks", f"{total_clicks:,.0f}", help="Total number of clicks on your ads.")
+row2_2.metric("CPC", f"${cpc:,.2f}", help="Average cost paid for each click.")
+row2_3.metric("Conversion Rate", f"{conv_rate:.2%}", help="Percentage of clicks that resulted in conversions.")
 
-st.markdown('<div class="section-title">3. Conversão & Retorno (Financial Impact)</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtle">Qual o custo por resultado e o retorno sobre o investimento?</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">3. Conversion & Return (Financial Impact)</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtle">What is the cost per result and the return on investment?</div>', unsafe_allow_html=True)
 row3_1, row3_2, row3_3, row3_4, row3_5 = st.columns(5)
-row3_1.metric("Conversions", f"{total_conversions:,.0f}", help="Número total de ações valiosas (vendas/leads).")
-row3_2.metric("CPA (Cost/Conv)", f"${cpa:,.2f}", help="Custo por Aquisição: Valor médio gasto para gerar uma conversão.")
-row3_3.metric("Total Spend", f"${total_spend:,.2f}", help="Valor total investido nas campanhas.")
-row3_4.metric("Total Revenue", f"${total_revenue:,.2f}", help="Valor total de receita gerada.")
-row3_5.metric("ROAS", f"{roas:.2f}x", help="Return on Ad Spend: Vezes que o valor investido retornou em receita.")
+row3_1.metric("Conversions", f"{total_conversions:,.0f}", help="Total number of valuable actions (sales/leads).")
+row3_2.metric("CPA (Cost/Conv)", f"${cpa:,.2f}", help="Cost per Acquisition: Average amount spent to generate a conversion.")
+row3_3.metric("Total Spend", f"${total_spend:,.2f}", help="Total amount invested in campaigns.")
+row3_4.metric("Total Revenue", f"${total_revenue:,.2f}", help="Total amount of revenue generated.")
+row3_5.metric("ROAS", f"{roas:.2f}x", help="Return on Ad Spend: Number of times the invested amount returned as revenue.")
 
 st.divider()
 
@@ -251,7 +278,51 @@ with chart_col2:
     st.plotly_chart(fig4, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 6. Extra Table (Top Campaigns)
+# 6. Map Analytics (Revenue by Location)
+# -----------------------------------------------------------------------------
+
+# st.markdown('<div class="section-title">4. Map Analytics</div>', unsafe_allow_html=True)
+# st.markdown('<div class="subtle">Geographic distribution of revenue generated by location.</div>', unsafe_allow_html=True)
+
+# # Aggregate revenue by coordinates
+# map_data = dff.groupby(['latitude', 'longitude', 'Location']).agg({'Sale_num': 'sum'}).reset_index()
+
+# # Pre-format revenue for the tooltip (Deck.gl template fix)
+# map_data['revenue_formatted'] = map_data['Sale_num'].apply(lambda x: f"${x:,.2f}")
+
+# if not map_data.empty:
+#     st.pydeck_chart(pdk.Deck(
+#         map_style='light',
+#         initial_view_state=pdk.ViewState(
+#             latitude=map_data['latitude'].mean(),
+#             longitude=map_data['longitude'].mean(),
+#             zoom=10, # Zoom mais próximo para ver a granularidade
+#             pitch=45,
+#         ),
+#         layers=[
+#             pdk.Layer(
+#                 'HeatmapLayer',
+#                 data=map_data,
+#                 get_position='[longitude, latitude]',
+#                 get_weight='Sale_num', # Heat weight is revenue
+#                 radius_pixels=60,      # Heat granularity
+#                 intensity=1,
+#                 threshold=0.05,
+#                 aggregation='"SUM"',
+#             ),
+#         ],
+#         tooltip={
+#             "html": "<b>Location:</b> {Location}<br><b>Revenue:</b> {revenue_formatted}",
+#             "style": {"color": "white"}
+#         }
+#     ))
+# else:
+#     st.info("No location data available for the current filters.")
+
+# st.divider()
+
+# -----------------------------------------------------------------------------
+# 7. Extra Table (Top Campaigns)
 # -----------------------------------------------------------------------------
 
 st.subheader("Top Campaigns Comparison")
@@ -292,4 +363,3 @@ st.dataframe(campaign_stats_display.style.format({
     'Conversions': '{:,.0f}'
 }), use_container_width=True, hide_index=True)
 
-st.caption("Generated by Senior Paid Media Performance System")
