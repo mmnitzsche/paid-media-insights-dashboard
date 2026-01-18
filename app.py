@@ -91,7 +91,7 @@ st.markdown(
 )
 
 # Load Data
-DATA_PATH = "GoogleAds_Performance_Standardized.csv"
+DATA_PATH = "data/GoogleAds_Performance_Standardized_v2.csv"
 if not os.path.exists(DATA_PATH):
     # Try fallback to original if standardized doesn't exist
     DATA_PATH = "GoogleAds_DataAnalytics_Sales_Uncleaned.csv"
