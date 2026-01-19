@@ -328,7 +328,7 @@ dff = df.loc[mask].copy()
 
 st.title("Paid Media Performance Dashboard")
 st.markdown(
-    '<div class="subtle">This dashboard shows the performance of paid media campaigns for NITIT Courses.</div>',
+    '<div class="subtle">This dashboard shows the performance of Google Ads paid media campaigns for NITIT courses.</div>',
     unsafe_allow_html=True,
 )
 
@@ -877,8 +877,8 @@ with tab_prediction:
                 st.metric("Planned Spend 🎯", f"${planned_spend:,.2f}")
     
             
-            # Context Info
-            st.write(f"**Confidence:** {summary['confidence']} | **Projected ROAS:** {summary['roas_total']:.2f}x | **Range (Baseline):** ${summary['revenue_low']:,.0f} - ${summary['revenue_high']:,.0f}")
+            # Context Info (Commented out per user request)
+            # st.write(f"**Confidence:** {summary['confidence']} | **Projected ROAS:** {summary['roas_total']:.2f}x | **Range (Baseline):** ${summary['revenue_low']:,.0f} - ${summary['revenue_high']:,.0f}")
             
             # 4. Final Chart (Dynamic Slope)
             fig_p = go.Figure()
@@ -947,16 +947,16 @@ with tab_about:
         '<div class="section-title">Project Overview</div>', unsafe_allow_html=True
     )
     st.write("""
-    The **Paid Media Performance Dashboard** was designed specifically for **NITIT Courses** to provide a clear, 
-    narrative-driven view of advertising results. 
-    
-    By grouping metrics into specialized sectors (Visibility, Engagement, and Financial Impact), this tool 
-    goes beyond just displaying numbers—it tells the story of the customer journey from the first impression 
-    to the final return on investment.
-    
+    The **Paid Media Performance Dashboard** was created for **NITIT Courses** to deliver a clear, narrative-driven view of advertising performance.
+
+    By organizing insights into three strategic layers (**Visibility, Engagement, and Financial Impact**), this dashboard goes beyond raw metrics—it connects the full customer journey, from the first impression to the final return on investment.
+
+    This is a **fictional project**, developed for portfolio and analytical demonstration purposes. The dataset used in this dashboard was sourced from **Kaggle** (Google Ads Sales Dataset).
+
     **Key Features:**
-    - **Narrative Flow:** Optimized layout for decision-making.
-    - **Geographic Insights:** Heatmap-based value tracking.
-    - **Advanced Data Cleaning:** Automatic standardization of campaign names, dates, and currency.
-    - **Integrated Branding:** Custom aesthetic aligned with the NITIT Courses identity.
+    - **Narrative Flow:** Structured layout designed for fast, executive-level decision-making.
+    - **Integrated Branding:** Custom visual identity aligned with the NITIT Courses concept.
+    - **Performance Metrics:** Includes core paid media and online sales KPIs such as **CPA, ROAS, CPC, CPM, and CTR**.
+    - **Prediction:** Revenue forecasting using **Linear Trend Analysis** combined with a **MA7 baseline**, including a **What-if simulation** to estimate how projected revenue changes based on planned budget investment.
     """)
+
