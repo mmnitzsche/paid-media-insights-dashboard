@@ -9,6 +9,101 @@ import os
 from sklearn.linear_model import LinearRegression
 
 # -----------------------------------------------------------------------------
+# 0. Forecasting Engine (Robust Baseline)
+# -----------------------------------------------------------------------------
+
+def baseline_forecast(daily_df: pd.DataFrame, horizon: int = 7, cap: float = 0.50):
+    """
+    daily_df: DataFrame with colunas ['date', 'revenue', 'spend', 'conversions']
+    horizon: dias a prever
+    cap: limite de ajuste de tendência (ex: 0.50 = +/-50% para mais sensibilidade)
+    """
+    d = daily_df.sort_values("date").copy()
+
+    # Garantir colunas numéricas
+    for col in ["revenue", "spend", "conversions"]:
+        d[col] = pd.to_numeric(d[col], errors="coerce").fillna(0)
+
+    if len(d) < 7:
+        return None
+
+    def _forecast_metric(series: pd.Series):
+        # base = MA7
+        base = series.tail(7).mean()
+
+        # tendência controlada (se tiver 14 dias)
+        if len(series) >= 14:
+            prev_mean = series.tail(14).head(7).mean()
+            if prev_mean > 0:
+                ratio = base / prev_mean
+            else:
+                ratio = 1.0
+            ratio = float(np.clip(ratio, 1 - cap, 1 + cap))
+        else:
+            ratio = 1.0
+
+        daily_pred = base * ratio
+        daily_pred = max(daily_pred, 0)
+
+        preds = np.repeat(daily_pred, horizon)
+        return preds, daily_pred
+
+    # Forecasts
+    rev_preds, rev_daily = _forecast_metric(d["revenue"])
+    spend_preds, spend_daily = _forecast_metric(d["spend"])
+    conv_preds, conv_daily = _forecast_metric(d["conversions"])
+
+    # Datas futuras
+    last_date = pd.to_datetime(d["date"].max())
+    future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=horizon, freq="D")
+
+    # Confidence (baseado em variação recente)
+    recent = d["revenue"].tail(14) if len(d) >= 14 else d["revenue"].tail(7)
+    mean = recent.mean()
+    std = recent.std()
+    cv = (std / (mean + 1e-9)) if mean > 0 else 1.0
+
+    if cv < 0.25:
+        confidence = "High"
+    elif cv < 0.50:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    # Range Low/High simples
+    low_factor = 0.90
+    high_factor = 1.10
+
+    forecast_df = pd.DataFrame({
+        "date": future_dates,
+        "pred_revenue": rev_preds,
+        "pred_spend": spend_preds,
+        "pred_conversions": conv_preds,
+    })
+
+    # ROAS previsto
+    forecast_df["pred_roas"] = np.where(
+        forecast_df["pred_spend"] > 0,
+        forecast_df["pred_revenue"] / forecast_df["pred_spend"],
+        0
+    )
+
+    summary = {
+        "revenue_total": float(forecast_df["pred_revenue"].sum()),
+        "spend_total": float(forecast_df["pred_spend"].sum()),
+        "conversions_total": float(forecast_df["pred_conversions"].sum()),
+        "roas_total": float(
+            (forecast_df["pred_revenue"].sum() / forecast_df["pred_spend"].sum())
+            if forecast_df["pred_spend"].sum() > 0 else 0
+        ),
+        "revenue_low": float(forecast_df["pred_revenue"].sum() * low_factor),
+        "revenue_high": float(forecast_df["pred_revenue"].sum() * high_factor),
+        "confidence": confidence,
+    }
+
+    return forecast_df, summary
+
+# -----------------------------------------------------------------------------
 # 1. Data Cleaning / Preparation Functions
 # -----------------------------------------------------------------------------
 
@@ -251,45 +346,42 @@ with tab_dashboard:
     daily = (
         dff.groupby(dff["date"].dt.date)
         .agg(
-            {
-                "Impressions": "sum",
-                "Clicks": "sum",
-                "Cost_num": "sum",
-                "Conversions": "sum",
-                "Sale_num": "sum",
-            }
+            revenue=("Sale_num", "sum"),
+            spend=("Cost_num", "sum"),
+            conversions=("Conversions", "sum"),
+            impressions=("Impressions", "sum"),
+            clicks=("Clicks", "sum"),
         )
         .reset_index()
         .rename(columns={"index": "date"})
     )
     daily["date"] = pd.to_datetime(daily["date"])
-    
-    # Base KPI Definitions
+
+    # Base KPI Definitions (Using dff for consistency with filter logic)
     total_spend = dff["Cost_num"].sum()
     total_revenue = dff["Sale_num"].sum()
     total_conversions = dff["Conversions"].sum()
     total_clicks = dff["Clicks"].sum()
 
-    daily["CPC"] = np.where(daily["Clicks"] > 0, daily["Cost_num"] / daily["Clicks"], 0)
-    daily["ConvRate"] = np.where(
-        daily["Clicks"] > 0, daily["Conversions"] / daily["Clicks"], 0
+    daily["cpc"] = np.where(daily["clicks"] > 0, daily["spend"] / daily["clicks"], 0)
+    daily["conv_rate"] = np.where(
+        daily["clicks"] > 0, daily["conversions"] / daily["clicks"], 0
     )
 
-    # Forecast Logic for Summary
-    week_forecast = 0
-    if len(daily) > 1:
-        X_sum = (daily['date'] - daily['date'].min()).dt.days.values.reshape(-1, 1)
-        y_sum = daily['Sale_num'].values
-        model_sum = LinearRegression().fit(X_sum, y_sum)
-        
-        last_d = pd.to_datetime(daily['date'].max())
-        future_sum = pd.date_range(last_d + pd.Timedelta(days=1), periods=7, freq='D')
-        future_t_sum = (future_sum - pd.to_datetime(daily['date'].min())).days.values.reshape(-1, 1)
-        preds_sum = np.maximum(model_sum.predict(future_t_sum), 0)
-        week_forecast = preds_sum.sum()
-        forecast_info = f"Based on recent trends, we expect a total revenue of ${week_forecast:,.2f} for the upcoming week from {last_d.date()}. Check the 'Prediction' tab for a detailed trend analysis."
+    # Forecast Calculation (Using the new robust engine with higher sensitivity)
+    result_forecast = baseline_forecast(daily, horizon=7, cap=0.50)
+    
+    if result_forecast:
+        forecast_df_dash, summary_dash = result_forecast
+        week_forecast = summary_dash["revenue_total"]
+        forecast_info = (
+            f"Expected Revenue (7d): **${week_forecast:,.2f}** | "
+            f"Confidence: **{summary_dash['confidence']}** | "
+            "Based on recent MA7 trends with optimized growth sensitivity (up to 50%)."
+        )
     else:
-        forecast_info = "Insufficient data for forecasting. Adjust filters for a wider range."
+        week_forecast = 0
+        forecast_info = "Insufficient data (at least 7 days required) for an accurate forecast."
 
     # Calculated Metrics
     total_impressions = dff["Impressions"].sum()
@@ -403,7 +495,7 @@ with tab_dashboard:
         fig1.add_trace(
             go.Scatter(
                 x=daily["date"],
-                y=daily["Impressions"],
+                y=daily["impressions"],
                 name="Impressions",
                 fill="tozeroy",
                 line=dict(color="#1f77b4"),
@@ -413,7 +505,7 @@ with tab_dashboard:
         fig1.add_trace(
             go.Scatter(
                 x=daily["date"],
-                y=daily["Clicks"],
+                y=daily["clicks"],
                 name="Clicks",
                 line=dict(color="#ff7f0e"),
             ),
@@ -455,7 +547,7 @@ with tab_dashboard:
         fig3.add_trace(
             go.Bar(
                 x=daily["date"],
-                y=daily["Cost_num"],
+                y=daily["spend"],
                 name="Spend ($)",
                 marker_color="#e377c2",
             )
@@ -463,7 +555,7 @@ with tab_dashboard:
         fig3.add_trace(
             go.Bar(
                 x=daily["date"],
-                y=daily["Sale_num"],
+                y=daily["revenue"],
                 name="Revenue ($)",
                 marker_color=COLOR_ACCENT,
             )
@@ -496,7 +588,7 @@ with tab_dashboard:
         fig2.add_trace(
             go.Bar(
                 x=daily["date"],
-                y=daily["Clicks"],
+                y=daily["clicks"],
                 name="Clicks",
                 marker_color="#ff7f0e",
                 opacity=0.7,
@@ -506,7 +598,7 @@ with tab_dashboard:
         fig2.add_trace(
             go.Scatter(
                 x=daily["date"],
-                y=daily["CPC"],
+                y=daily["cpc"],
                 name="CPC ($)",
                 mode="lines+markers",
                 line=dict(color="#2ca02c"),
@@ -549,7 +641,7 @@ with tab_dashboard:
         fig4.add_trace(
             go.Bar(
                 x=daily["date"],
-                y=daily["Conversions"],
+                y=daily["conversions"],
                 name="Conversions",
                 marker_color="#9467bd",
                 opacity=0.7,
@@ -559,7 +651,7 @@ with tab_dashboard:
         fig4.add_trace(
             go.Scatter(
                 x=daily["date"],
-                y=daily["ConvRate"],
+                y=daily["conv_rate"],
                 name="Conv. Rate (%)",
                 mode="lines+markers",
                 line=dict(color="#d62728"),
@@ -714,88 +806,114 @@ with tab_dashboard:
     )
 
 with tab_prediction:
-    col_h1, col_h2 = st.columns([2, 1])
+    st.markdown('<div class="section-title">Revenue Forecast Analysis</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="subtle">This model uses <b>Linear Trend Analysis</b> combined with a robust MA7 baseline for scaling. '
+        '<b>Simulation (What-if):</b> Enter your planned budget below to see how the trend line and projected revenue react based on your simulated investment.</div>', 
+        unsafe_allow_html=True
+    )
     
-    with col_h1:
-        st.markdown('<div class="section-title">Revenue Forecast Analysis</div>', unsafe_allow_html=True)
-        st.markdown('<div class="subtle">Using a Linear Regression trend model to project future revenue based on filtered data.</div>', unsafe_allow_html=True)
-    
-    if len(daily) > 1:
-        with col_h2:
-            horizon = st.slider("Forecast horizon (days)", 7, 30, 14, help="Number of days to project into the future.")
-            
-            # Forecast Calculation (needed before the metric)
-            daily_p = daily.copy()
-            daily_p['t'] = (daily_p['date'] - daily_p['date'].min()).dt.days
-            X_p = daily_p[['t']].values
-            y_p = daily_p['Sale_num'].values
-            model_p = LinearRegression().fit(X_p, y_p)
-            
-            last_date_p = pd.to_datetime(daily_p['date'].max())
-            future_dates_p = pd.date_range(last_date_p + pd.Timedelta(days=1), periods=horizon, freq="D")
-            future_t_p = (future_dates_p - pd.to_datetime(daily_p['date'].min())).days.values.reshape(-1, 1)
-            y_pred_p = np.maximum(model_p.predict(future_t_p), 0)
-            proj_rev = y_pred_p.sum()
-            
-            st.metric(
-                f"Projected Revenue ({horizon}d)",
-                f"${proj_rev:,.2f}",
-                help="Sum of all predicted daily revenues for the selected horizon."
+    if len(daily) >= 7:
+        # 1. Base Setup & Controls
+        col_setup1, col_setup2 = st.columns([1, 1])
+        
+        with col_setup1:
+            horizon = st.slider(
+                "Forecast horizon (days)", 
+                7, 30, 14, 
+                help="Select how many days into the future to project."
             )
-        daily_p['t'] = (daily_p['date'] - daily_p['date'].min()).dt.days
-        X_p = daily_p[['t']].values
-        y_p = daily_p['Sale_num'].values
         
-        model_p = LinearRegression().fit(X_p, y_p)
+        # Run Robust Forecast for Summary Stats (with 50% trend cap for sensitivity)
+        result_base = baseline_forecast(daily, horizon=horizon, cap=0.50)
         
-        # Future dates
-        last_date_p = pd.to_datetime(daily_p['date'].max())
-        future_dates_p = pd.date_range(last_date_p + pd.Timedelta(days=1), periods=horizon, freq="D")
-        future_t_p = (future_dates_p - pd.to_datetime(daily_p['date'].min())).days.values.reshape(-1, 1)
-        y_pred_p = np.maximum(model_p.predict(future_t_p), 0)
-        
-        forecast_p = pd.DataFrame({
-            "date": future_dates_p,
-            "predicted_revenue": y_pred_p
-        })
-        
-        # Plot
-        fig_p = go.Figure()
-        fig_p.add_trace(go.Scatter(
-            x=daily_p['date'], y=daily_p['Sale_num'],
-            mode="lines+markers",
-            name="Actual Revenue",
-            line=dict(color=COLOR_ACCENT)
-        ))
-        fig_p.add_trace(go.Scatter(
-            x=forecast_p['date'], y=forecast_p['predicted_revenue'],
-            mode="lines+markers",
-            name="Forecasted Trend",
-            line=dict(color="#e377c2", dash='dot')
-        ))
-        
-        fig_p.update_layout(
-            title="Revenue Trend & Forecast",
-            paper_bgcolor='rgba(0,0,0,0)', 
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color=COLOR_TEXT_PRIMARY),
-            legend=dict(
-                orientation="h", 
-                yanchor="bottom", 
-                y=1.02, 
-                xanchor="right", 
-                x=1,
-                font=dict(color=COLOR_TEXT_PRIMARY)
-            ),
-            xaxis=dict(gridcolor=COLOR_SURFACE, color=COLOR_TEXT_SECONDARY),
-            yaxis=dict(title="Revenue ($)", gridcolor=COLOR_SURFACE, color=COLOR_TEXT_SECONDARY),
-            title_font=dict(color=COLOR_TEXT_PRIMARY),
-            height=450
-        )
-        
-        st.plotly_chart(fig_p, use_container_width=True)
+        if result_base:
+            forecast_df_base, summary = result_base
+            
+            with col_setup2:
+                # Defaulting to the baseline trend spend instead of 0 to show the full potential immediately
+                planned_spend = st.number_input(
+                    "Planned Campaign Spend ($)",
+                    value=float(summary['spend_total']),
+                    step=100.0,
+                    help="Simulation: This defaults to the current trend spend. Increase it to see growth potential!"
+                )
+            
+            st.divider()
+            
+            # 2. Linear Regression for Visually Dynamic Slope
+            daily_reg = daily.copy()
+            daily_reg['t'] = (daily_reg['date'] - daily_reg['date'].min()).dt.days
+            X = daily_reg[['t']].values
+            y = daily_reg['revenue'].values
+            
+            model = LinearRegression().fit(X, y)
+            
+            # Future Dates for Charting
+            last_date = pd.to_datetime(daily_reg['date'].max())
+            future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=horizon, freq="D")
+            future_t = (future_dates - pd.to_datetime(daily_reg['date'].min())).days.values.reshape(-1, 1)
+            
+            # Base Regression Projection (the points on the line)
+            y_trend_base = np.maximum(model.predict(future_t), 0)
+            
+            # Scaling Factor: Based on Planned Spend vs Baseline Trend Spend
+            # We want the SUM of the plotted line to match the Simulated Revenue
+            simulated_total_revenue = planned_spend * summary['roas_total']
+            
+            # If the user enters 0, we show 0. Otherwise we scale the trend line.
+            if planned_spend > 0:
+                current_trend_sum = y_trend_base.sum()
+                scaling_factor = simulated_total_revenue / current_trend_sum if current_trend_sum > 0 else 1.0
+                y_plot = y_trend_base * scaling_factor
+            else:
+                y_plot = np.zeros(len(future_dates))
+            
+            # 3. KPI Metrics
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.metric("Simulated Revenue 💰", f"${simulated_total_revenue:,.2f}")
+            with m2:
+                st.metric("Planned Spend 🎯", f"${planned_spend:,.2f}")
+    
+            
+            # Context Info
+            st.write(f"**Confidence:** {summary['confidence']} | **Projected ROAS:** {summary['roas_total']:.2f}x | **Range (Baseline):** ${summary['revenue_low']:,.0f} - ${summary['revenue_high']:,.0f}")
+            
+            # 4. Final Chart (Dynamic Slope)
+            fig_p = go.Figure()
+            
+            fig_p.add_trace(go.Scatter(
+                x=daily['date'], y=daily['revenue'],
+                mode="lines+markers",
+                name="Actual Revenue",
+                line=dict(color=COLOR_ACCENT)
+            ))
+            
+            fig_p.add_trace(go.Scatter(
+                x=future_dates, y=y_plot,
+                mode="lines+markers",
+                name="Simulated Forecast",
+                line=dict(color="#e377c2", dash='dot')
+            ))
+            
+            fig_p.update_layout(
+                title=f"Forecast Simulation ({horizon} days) — Dynamic Trend",
+                paper_bgcolor='rgba(0,0,0,0)', 
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLOR_TEXT_PRIMARY),
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(color=COLOR_TEXT_PRIMARY)
+                ),
+                xaxis=dict(gridcolor=COLOR_SURFACE, color=COLOR_TEXT_SECONDARY),
+                yaxis=dict(title="Revenue ($)", gridcolor=COLOR_SURFACE, color=COLOR_TEXT_SECONDARY),
+                height=450
+            )
+            
+            st.plotly_chart(fig_p, use_container_width=True)
     else:
-        st.warning("Insufficient data for forecasting. Please adjust your filters to include a wider date range.")
+        st.warning("Insufficient historical data. At least 7 days of daily history are required for a trend forecast.")
 
 with tab_about:
     st.markdown(
